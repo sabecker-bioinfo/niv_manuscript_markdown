@@ -1,0 +1,947 @@
+---
+title: "North Imperial Valley UA Study"
+author: "Elaina Graham"
+date: "2022-09-15"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 2
+    toc_float: true
+    fig_caption: yes
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+This is an R Markdown document demonstrating the analysis of the data from the Biorxiv paper "Universal Amplicon Sequencing of North Imperial Valley Wetlands Microbiomes".
+
+
+```{r libs, echo=FALSE, warning=FALSE, results='hide', message=FALSE}
+library(phyloseq,quietly = T)
+library(genefilter,quietly = T)
+library(ggplot2,quietly = T)
+library(phangorn,quietly = T)
+library(dada2,quietly = T)
+library(DECIPHER,quietly = T)
+library(ggtree,quietly = T)
+library(RColorBrewer,quietly = T)
+library(reshape2,quietly = T)
+library(dplyr,quietly = T)
+library(plotly,quietly = T)
+library(processx,quietly = T)
+library(reticulate,quietly = T)
+library(tidyverse,quietly = T)
+library(grid,quietly = T)
+library(gridExtra,quietly = T)
+library(cowplot,quietly = T)
+library(patchwork,quietly = T)
+library(rmarkdown,quietly = T)
+library(knitr,quietly = T)
+library(readxl,quietly=T)
+library(kableExtra,quietly=T)
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+<style>
+p.caption {
+  font-size: 0.9em;
+  font-style: italic;
+  font-weight: bold;
+  color: grey;
+  margin-right: 10%;
+  margin-left: 10%; 
+  text-align: justify;
+}
+</style>
+
+## Zymo Mock Community Analysis
+
+First we analyze how our Universal Amplicon (UA) method performs on the [Zymo Mock Community](https://www.zymoresearch.com/products/zymobiomics-microbial-community-dna-standard) by building a bar chart that compares our experimental distribution of reads to the theoretical or exepected distribution of the Zymo Mock community.
+<br/><br/>
+
+```{r cp1_zymo, echo=FALSE, fig.width=15, fig.height=15, fig.cap = "Figure 1A: Comparison of known composition for the Zymo mock community(far-right bar) compared to 28 sequencing runs using the UA primers described in this paper.  Perfect quantitation with the UA method would be an exact match of a given bar to the far-right bar"}
+
+theme_set(theme_bw())
+
+niv_data_mock_controls_zymo <- readRDS("zymo_mock_controls.rds")
+min_counts_for_taxa_mock_controls_zymo <- 100
+min_samples_that_need_min_counts_for_taxa_mock_controls_zymo <- 3
+niv_data_mock_controls_zymo_filtered <- filter_taxa(niv_data_mock_controls_zymo, filterfun(kOverA(min_samples_that_need_min_counts_for_taxa_mock_controls_zymo, min_counts_for_taxa_mock_controls_zymo)), prune = TRUE)
+
+niv_data_mock_controls_zymo_filtered <- prune_taxa(taxa_sums(niv_data_mock_controls_zymo_filtered) > 0, niv_data_mock_controls_zymo_filtered)
+
+# transform to 10K counts
+niv_data_mock_controls_zymo_filtered_10K <- transform_sample_counts(niv_data_mock_controls_zymo_filtered, function(x) {round(x / sum(x) * 10000)})
+
+# glom to the genus level
+niv_data_mock_controls_zymo_filtered_10K_std_genus_glom <- tax_glom(niv_data_mock_controls_zymo_filtered_10K, "Genus")
+std_psmelt <- psmelt(niv_data_mock_controls_zymo_filtered_10K_std_genus_glom)
+
+# bar plot
+# order this melted data frame by date and then station
+std_psmelt_ordered <- std_psmelt[with(std_psmelt, order(run)), ]
+
+# add a column with the desired order of samples to appear in plots
+std_psmelt_ordered$numerical_order <- c(1:nrow(std_psmelt_ordered))
+
+# reorder the levels of the x variable to match the desired order
+std_psmelt_ordered$Sample <- factor(std_psmelt_ordered$Sample, levels=unique(std_psmelt_ordered$Sample[order(std_psmelt_ordered$numerical_order)]))
+
+# add rows to the data frame for the theoretical amounts
+ta <- data.frame(data.frame(c("Listeria", "Pseudomonas", "Bacillus", "Salmonella", "Lactobacillus", "Enterococcus", "Staphylococcus", "Saccharomyces", "Cryptococcus"), c(1240, 360, 1530, 1800, 1610, 870, 1360, 930, 330), rep("Zymo_Theoretical", 9)))
+colnames(ta) <- c("Genus", "Abundance", "sample_name")
+
+std_psmelt_ordered_with_theoretical <- bind_rows(std_psmelt_ordered, ta)
+std_psmelt_ordered_with_theoretical$sample_name<-gsub("Zymo_Mock_Std_1_","",std_psmelt_ordered_with_theoretical$sample_name)
+std_psmelt_ordered_with_theoretical$sample_name<-gsub("Zymo_Mock_Std_","",std_psmelt_ordered_with_theoretical$sample_name)
+std_psmelt_ordered_with_theoretical$sample_name<-gsub("Zymo_","",std_psmelt_ordered_with_theoretical$sample_name)
+
+cp1_zymo <- ggplot(std_psmelt_ordered_with_theoretical, aes_string(x="sample_name", y="Abundance", fill="Genus"))+ guides(fill=guide_legend(nrow=3, byrow=TRUE))
+cp1_zymo <- cp1_zymo + geom_bar(stat="identity", position="stack")
+cp1_zymo <- cp1_zymo + theme(axis.text.x=element_text(angle=-90, hjust=0, size=20,face="bold"))
+cp1_zymo <- cp1_zymo + theme(legend.position = "bottom")
+
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+levelPalette <- getPalette(length(get_taxa_unique(niv_data_mock_controls_zymo_filtered_10K_std_genus_glom, taxonomic.rank = "Genus")))
+cp1_zymo <- cp1_zymo + scale_fill_manual(values=levelPalette)
+cp1_zymo <- cp1_zymo + theme(strip.text.y = element_text(angle=0),text = element_text(size = 30,face="bold"))
+cp1_zymo <- cp1_zymo + xlab('sample_name')
+cp1_zymo <- cp1_zymo + ggtitle("Zymo mock community composition (Genus)") + theme(plot.title = element_text(size = 37, face = "bold"))+ theme(plot.margin = margin(0.5,0.5,0.5,0.5, "in"))
+cp1_zymo
+
+#ggsave(cp1_zymo,file="zymo_genus.eps",device="eps",height=15,width=15,units="in")
+```
+<br/><br/>
+Next we want to generate some box plots of the expected/theoretical distribution vs the actual distribution separated by genus.
+<br/><br/>
+```{r zymo_box_with_theoretical, echo=FALSE, fig.width=12, fig.height=17, fig.cap = "Figure 1B: Box and whisker plots showing abundance of each organism within the Zymo mock community over all 28 runs compared to the theoretical or expected abundance of each organism within the mock community."}
+# add theoretical values from Zymo literature to melted data
+std_psmelt_with_theoretical <- std_psmelt
+std_psmelt_with_theoretical$data_or_theory <- "experimental"
+genera_list <- c("Listeria", "Pseudomonas", "Bacillus", "Salmonella", "Lactobacillus", "Enterococcus", "Staphylococcus", "Saccharomyces", "Cryptococcus")
+theoretical_abundances <- c(1240, 360, 1530, 1800, 1610, 870, 1360, 930, 330)
+current_count <- 0
+for(genus in genera_list) {
+  current_count <- current_count + 1
+  std_psmelt_with_theoretical <- rbind(std_psmelt_with_theoretical, std_psmelt_with_theoretical[std_psmelt_with_theoretical$Genus==genus, ][1,])
+  std_psmelt_with_theoretical[nrow(std_psmelt_with_theoretical), "Abundance"] <- theoretical_abundances[current_count]
+  std_psmelt_with_theoretical[nrow(std_psmelt_with_theoretical), "data_or_theory"] <- "theoretical"
+}
+
+# box plot
+zymo_box_with_theoretical <- ggplot(std_psmelt_with_theoretical, aes(y=Abundance, x=data_or_theory, color=data_or_theory)) + geom_boxplot(width=0.2) + geom_jitter(position = position_jitter(height=0.2,width = 0.05)) + ggtitle("      Prevalence of ASVs in\n Zymo standard mock community\n") + theme(legend.text= element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 37, face = "bold"), axis.text.x = element_text(angle = 90),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 25))  +facet_wrap(Genus~.,nrow=6) 
+zymo_box_with_theoretical<- zymo_box_with_theoretical+ scale_fill_manual(name="data_or_theory", values=c("#FFC20A", "black")) + scale_color_manual(name="data_or_theory", values=c("#FFC20A", "black"))
+zymo_box_with_theoretical <- zymo_box_with_theoretical+ theme(plot.margin = margin(0.5,0.5,0.5,0.5, "in"),text = element_text(size = 30,face="bold"))
+zymo_box_with_theoretical
+#facet_grid(Genus~.,switch="y")
+#ggsave(zymo_box_with_theoretical,file="zymo_box_with_theoretical.eps",device="eps",height=17,width=12,units="in")
+```
+<br/><br/>
+Now lets combine the two figures above
+<br/><br/>
+
+```{r combined, echo=FALSE, fig.width=26, fig.height=20}
+combined<- cp1_zymo + zymo_box_with_theoretical +plot_layout(ncol=2,widths=c(2,1.5))
+combined
+#ggsave(combined,file="Figure1.eps",device="eps",height=20,width=26,units="in")
+```
+
+## Shotgun Metagenomics Comparison
+
+
+<br/><br/>
+To further validate the Universal Amplicon (UA) approach we collected data from the following sites around the North Imperial Valley.
+<br/><br/>
+
+```{r supplemental_table1, echo=FALSE}
+supplemental_table_1<-read_excel("Supplemental_Tables.xlsx","Supplemental_Table_1")
+kbl(supplemental_table_1)%>% kable_styling(bootstrap_options = c("striped", "hover","condensed"))
+```
+
+<br/><br/><br/>
+
+Of those sites we selected four time points from Morton Bay to performed shotgun sequencing and uncover any potential biases with the UA in real world data.
+
+<br/><br/><br/>
+
+```{r supplemental_table3, echo=FALSE}
+supplemental_table_3<-read_excel("Supplemental_Tables.xlsx","Supplemental_Table_3")
+kbl(supplemental_table_3)%>% kable_styling(bootstrap_options = c("striped", "hover","condensed"))
+```
+<br/><br/><br/>
+
+```{r heatmap, echo=FALSE, fig.width=12, fig.height=10, fig.cap = c("Figure 2: Comparison of shotgun sequencing versus UA characterization of microbial community composition for Morton Bay samples from 2018-04-30, 2018-05-30, 2018-06-26, and 2018-07-25. Heatmap representation of the fraction of sequencing reads corresponding to the given Phyla.  Our UA reads contained a significant quantity of reads that could not be classified any more specifically than the Kingdom of Fungi, and hence this kingdom appears adjacent to other phyla.<br/><br/><br/><br/>","<br/>Figure 2v2: Comparison of shotgun sequencing versus UA characterization of microbial community composition for Morton Bay samples from 2018-04-30, 2018-05-30, 2018-06-26, and 2018-07-25 by fraction of total reads visualized as a bar plot colored by Phylum assignment" )}
+
+theme_set(theme_bw())
+##import shotgun
+IVF005_2018_04_30_kraken2_nt_bracken_P<-read.table("bracken_shotgun_nt_db/IVF005_2018-04-30_kraken2_nt_bracken_P.bracken",sep="\t",header=T,comment.char="")
+IVF005_2018_05_30_kraken2_nt_bracken_P<-read.table("bracken_shotgun_nt_db/IVF005_2018-05-30_kraken2_nt_bracken_P.bracken",sep="\t",header=T,comment.char="")
+IVF005_2018_06_26_kraken2_nt_bracken_P<-read.table("bracken_shotgun_nt_db/IVF005_2018-06-26_kraken2_nt_bracken_P.bracken",sep="\t",header=T,comment.char="")
+IVF005_2018_07_25_kraken2_nt_bracken_P<-read.table("bracken_shotgun_nt_db/IVF005_2018-07-25_kraken2_nt_bracken_P.bracken",sep="\t",header=T,comment.char="")
+IVF005_2018_04_30_kraken2_nt_bracken_P$date <- "04-30"
+IVF005_2018_05_30_kraken2_nt_bracken_P$date <- "05-30"
+IVF005_2018_06_26_kraken2_nt_bracken_P$date <- "06-26"
+IVF005_2018_07_25_kraken2_nt_bracken_P$date <- "07-25"
+IVF005_all_bracken_nt_P <- data.frame(rbind(IVF005_2018_04_30_kraken2_nt_bracken_P, IVF005_2018_05_30_kraken2_nt_bracken_P, IVF005_2018_06_26_kraken2_nt_bracken_P, IVF005_2018_07_25_kraken2_nt_bracken_P), stringsAsFactors = FALSE)
+IVF005_all_bracken_nt_P$name <- as.character(IVF005_all_bracken_nt_P$name)  # fixes factor issues that arise
+# Bacillariophyta is a division of phylum Ochrophyta, so make that fix
+IVF005_all_bracken_nt_P[IVF005_all_bracken_nt_P[, "name"] == "Bacillariophyta", "name"] <- "Ochrophyta"
+
+# filter to only keep phyla with at least 1% relative prevalence
+IVF005_all_bracken_nt_P_0.01 <- IVF005_all_bracken_nt_P[IVF005_all_bracken_nt_P$fraction_total_reads >= 0.01, ]
+
+##import UA data
+# remove samples and taxa with low counts
+niv_water_only_phy <- readRDS("niv_water_data.rds")
+niv_data_mock_controls_zymo <- readRDS("zymo_mock_controls.rds")
+###
+min_counts_per_sample <- 1000
+min_counts_for_taxa <- 10
+min_samples_that_need_min_counts_for_taxa <- 1
+
+niv_water_only_count_filtered_phy <- prune_samples(sample_sums(niv_water_only_phy) >= min_counts_per_sample, niv_water_only_phy)
+niv_water_only_fully_filtered_raw <- filter_taxa(niv_water_only_count_filtered_phy, filterfun(kOverA(min_samples_that_need_min_counts_for_taxa, min_counts_for_taxa)), prune = TRUE)
+
+# transform to 10000 counts per sample
+niv_water_only_fully_filtered <- transform_sample_counts(niv_water_only_fully_filtered_raw, function(x) {round(x / sum(x) * 10000)})
+
+ivf005_regex <- "IVF0005"
+
+min_counts_per_sample_IVF005 <- 1000
+niv_data_sample_count_filtered_phy_IVF005 <- prune_samples(sample_sums(niv_water_only_phy) >= min_counts_per_sample_IVF005, niv_water_only_phy)
+
+# remove taxa with too few counts
+min_counts_for_taxa_IVF005 <- 2
+min_samples_that_need_min_counts_for_taxa_IVF005 <- 1
+niv_data_fully_filtered_raw_IVF005 <- filter_taxa(niv_data_sample_count_filtered_phy_IVF005, filterfun(kOverA(min_samples_that_need_min_counts_for_taxa_IVF005, min_counts_for_taxa_IVF005)), prune = TRUE)
+
+# normalize to 10000 counts per sample
+niv_data_fully_filtered_IVF005 <- transform_sample_counts(niv_data_fully_filtered_raw_IVF005, function(x) {round(x / sum(x) * 10000)})
+
+s_df_niv_water_only_filtered_IVF005 <- data.frame(sample_data(niv_data_fully_filtered_IVF005))
+ivf005_s_df <- data.frame(subset(s_df_niv_water_only_filtered_IVF005, grepl(ivf005_regex, s_df_niv_water_only_filtered_IVF005$station)))
+ivf005_sample_names <- row.names(ivf005_s_df)
+ivf005_data_phy <- prune_samples(ivf005_sample_names, niv_data_fully_filtered_IVF005)
+ivf005_data_phy <- prune_taxa(taxa_sums(ivf005_data_phy) > 0, ivf005_data_phy)
+
+# merge on date and re-transform because merge currently sums up ASVs
+ivf005_merged <- merge_samples(ivf005_data_phy, 'date')
+ivf005_merged <- transform_sample_counts(ivf005_merged, function(x) {round(x / sum(x) * 10000)})
+
+# extract the samples that match the shotgun data
+IVF005_spring_2018_sample_names <- c("2018-04-30", "2018-05-30", "2018-06-26", "2018-07-25")
+ivf005_merged_spring2018 <- prune_samples(IVF005_spring_2018_sample_names, ivf005_merged)
+
+
+# Before glomming, we manually fix the tax_table to resolve the inconsistent application of phylogeny
+tt_df <- data.frame((tax_table(ivf005_merged_spring2018)), stringsAsFactors = F)
+
+# We need to fix: Perkinsea, Metazoa, Fungi, Discoba_chloroplast, Cryptophyta (any others don't appear in the >1% filtered)
+tt_df_perkinsea <- filter(tt_df, Phylum == "Perkinsea")
+tt_df_metazoa <- filter(tt_df, Phylum == "Metazoa")
+tt_df_fungi <- filter(tt_df, Phylum == "Fungi")
+tt_df_discoba <- filter(tt_df, Phylum == "Discoba")
+tt_df_cryptophyta <- filter(tt_df, Phylum == "Cryptophyta")
+
+n_tax_rows <- nrow(tt_df)
+for(i in 1:n_tax_rows) {
+  if(! is.na(tt_df[i, "Phylum"])) {
+    if(tt_df[i, "Phylum"] == "Perkinsea") {
+      tt_df[i, "Phylum"] <- "Miozoa"
+    }
+    
+    if(tt_df[i, "Phylum"] == "Metazoa") {
+      if(! is.na(tt_df[i, "Class"])) {
+        tt_df[i, "Phylum"] <- tt_df[i, "Class"]
+      }
+    }
+    
+    if(tt_df[i, "Phylum"] == "Fungi") {
+      if(! is.na(tt_df[i, "Class"])) {
+        tt_df[i, "Phylum"] <- tt_df[i, "Class"]
+      }
+    }
+    
+     if(tt_df[i, "Phylum"] == "Discoba") {
+      if(! is.na(tt_df[i, "Class"])) {
+        tt_df[i, "Phylum"] <- tt_df[i, "Class"]
+      }
+     }
+    
+    if(tt_df[i, "Phylum"] == "Cryptophyta") {
+      tt_df[i, "Phylum"] <- "Cryptista"
+     }
+    
+  }
+  
+}
+
+tt_df_tt <- tax_table(tt_df)
+row.names(tt_df_tt@.Data) <- row.names(tt_df)
+colnames(tt_df_tt@.Data) <- colnames(tt_df)
+
+tax_table(ivf005_merged_spring2018) <- tt_df_tt
+
+
+#Now we can compare the UA vs. shotgun.
+
+
+ivf005_merged_glom_phylum_spring_2018 <- tax_glom(ivf005_merged_spring2018, taxrank="Phylum")
+
+all_ua_for_comp_phyloseq <- ivf005_merged_glom_phylum_spring_2018
+all_shotgun_for_comp_df <- IVF005_all_bracken_nt_P
+
+all_ua_phyla_table_asv <- data.frame(t(otu_table(all_ua_for_comp_phyloseq)))
+all_ua_phyla_tax_table <- data.frame(tax_table(all_ua_for_comp_phyloseq)@.Data, stringsAsFactors = F)
+
+# make some fixes to the all_ua_phyla_tax_table
+# chlorophyta, chryptophyta
+all_ua_phyla_tax_table_before_fixes <- all_ua_phyla_tax_table
+all_ua_phyla_tax_table <- all_ua_phyla_tax_table[, c(1, 2)]
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Chloroplast" & all_ua_phyla_tax_table["Phylum"]=="Chlorophyta" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Chlorophyta_chloroplast"
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Chloroplast" & all_ua_phyla_tax_table["Phylum"]=="Cryptista" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Cryptista_chloroplast"
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Chloroplast" & all_ua_phyla_tax_table["Phylum"]=="Cryptophyta" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Cryptophyta_chloroplast"
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Chloroplast" & all_ua_phyla_tax_table["Phylum"]=="Discoba" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Discoba_chloroplast"
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Chloroplast" & all_ua_phyla_tax_table["Phylum"]=="Euglenozoa" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Euglenozoa_chloroplast"
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Chloroplast" & all_ua_phyla_tax_table["Phylum"]=="Haptophyta" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Haptophyta_chloroplast"
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Chloroplast" & all_ua_phyla_tax_table["Phylum"]=="Ochrophyta" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Ocyrophyta_chloroplast"
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Mitochondria" & all_ua_phyla_tax_table["Phylum"]=="Proteobacteria" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Proteobacteria_mitochondria"
+
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Chloroplast" & all_ua_phyla_tax_table["Phylum"]=="Streptophyta" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Streptophyta_chloroplast"
+
+# Because the kingdom is annotated as Bacteria, we remove the "/Chloroplast" nomenclature
+rowname_to_fix <- row.names(all_ua_phyla_tax_table[all_ua_phyla_tax_table["Kingdom"]=="Bacteria" & all_ua_phyla_tax_table["Phylum"]=="Cyanobacteria/Chloroplast" , ])
+all_ua_phyla_tax_table[rowname_to_fix, "Phylum"] <- "Cyanobacteria"
+
+# make the row names for the UA data equal to the phylum
+all_ua_phyla_table_asv_row_names <- row.names(all_ua_phyla_table_asv)
+all_ua_phyla_table_phyla_row_names <- all_ua_phyla_tax_table[all_ua_phyla_table_asv_row_names, "Phylum"]
+all_ua_phyla_table_phyla <- all_ua_phyla_table_asv
+rownames(all_ua_phyla_table_phyla) <- all_ua_phyla_table_phyla_row_names
+names(all_ua_phyla_table_phyla) <- c("IVF005_2018_04_30", "IVF005_2018_05_30", "IVF005_2018_06_26", "IVF005_2018_07_25")
+
+# find the Phyla from both UA and shotgun that are at least 1% prevalent
+# UA
+ua_phyla_over_1percent <- row.names(all_ua_phyla_table_phyla[apply(all_ua_phyla_table_phyla, 1, max) >= 100, ])
+
+# shotgun
+shotgun_phyla_over_1percent <- as.vector(unique(all_shotgun_for_comp_df[all_shotgun_for_comp_df$fraction_total_reads >= 0.01, "name"]))
+
+shotgun_and_ua_phyla_over_1percent <- unique(c(ua_phyla_over_1percent, shotgun_phyla_over_1percent))
+
+all_shotgun_for_comp_in_top1percent <- all_shotgun_for_comp_df[all_shotgun_for_comp_df$name %in% shotgun_and_ua_phyla_over_1percent, ]
+all_shotgun_for_comp_in_top1percent_melted <- all_shotgun_for_comp_in_top1percent[, c("name", "date", "fraction_total_reads")]
+all_shotgun_for_comp_in_top1percent_melted$experiment <- "shotgun"
+
+all_ua_phyla_table_phyla_in_top1percent <- all_ua_phyla_table_phyla[rownames(all_ua_phyla_table_phyla) %in% shotgun_and_ua_phyla_over_1percent, ]
+
+all_ua_phyla_table_phyla_in_top1percent$name <- rownames(all_ua_phyla_table_phyla_in_top1percent)
+all_ua_phyla_table_phyla_in_top1percent_melted <- melt(all_ua_phyla_table_phyla_in_top1percent)
+all_ua_phyla_table_phyla_in_top1percent_melted$date <- gsub("IVF005_2018_(\\d+)_(\\d+)", "\\1-\\2", all_ua_phyla_table_phyla_in_top1percent_melted$variable, fixed=F)
+all_ua_phyla_table_phyla_in_top1percent_melted$fraction_total_reads <- all_ua_phyla_table_phyla_in_top1percent_melted$value / 10000
+all_ua_phyla_table_phyla_in_top1percent_melted$variable <- NULL
+all_ua_phyla_table_phyla_in_top1percent_melted$value <- NULL
+all_ua_phyla_table_phyla_in_top1percent_melted$experiment <- "UA"
+
+comp_melted <- rbind(all_ua_phyla_table_phyla_in_top1percent_melted, all_shotgun_for_comp_in_top1percent_melted)
+
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+levelPalette <- getPalette(length(unique(comp_melted$name)))
+comp_heatmap <- ggplot(comp_melted) + geom_tile(aes(x=experiment, y=name, fill=fraction_total_reads)) + facet_grid(cols=vars(date)) + scale_fill_gradient2(high="#0C2C84", mid = "#0c6884", low="#f3f6fe", midpoint=0.10) + ylab('Phylum')+theme(legend.position = "bottom",text = element_text(size = 15,face="bold"))
+comp_bar_plot <- ggplot(comp_melted) + geom_col(aes(x=experiment, y=fraction_total_reads, fill=name)) + scale_fill_manual(values=levelPalette) + facet_grid(cols=vars(date))+theme(legend.position="bottom",text = element_text(size = 15,face="bold"))
+comp_heatmap
+comp_bar_plot
+
+##ggsave(comp_heatmap,file="shotgun_heatmap.eps",device="eps",height=10,width=10,units="in")
+##ggsave(comp_bar_plot,file="shotgun_barplot.eps",device="eps",height=10,width=12,units="in")
+```
+<br/><br/>
+
+## North Imperial Valley Community Analysis
+
+
+Now that we have confirmed that the fraction of total reads from each phylum overlaps between shotgun metagenomics and the UA amplicon method in identical samples we can expand our analysis to test the UA primers of real samples collected from the North Imperial Valley of California.
+<br/><br/>
+
+### Community Overview
+
+First we will look at the relationship between all our samples using a Non-metric multidimensional scaling ordination of each sample.
+
+<br/><br/>
+
+```{r nmds, echo=FALSE, fig.width=8, fig.height=8, fig.cap = c("Figure 3A: Non-metric multidimensional scaling ordination of each sample. Samples are colored by station ID.<br/><br/><br/><br/>","<br/>Figure A (Plotly 3D): Recreation of Figure 3A in 3D using NMDS axis 1, 2 and 3 as calculated via phyloseq ordinate" )}
+
+niv_water_only_phy <- readRDS("niv_water_data.rds")
+niv_data_mock_controls_zymo <- readRDS("zymo_mock_controls.rds")
+# Phyloseq workflow for experimental samples (NIV Wetlands)
+
+# remove samples and taxa with low counts
+min_counts_per_sample <- 1000
+min_counts_for_taxa <- 10
+min_samples_that_need_min_counts_for_taxa <- 1
+
+niv_water_only_count_filtered_phy <- prune_samples(sample_sums(niv_water_only_phy) >= min_counts_per_sample, niv_water_only_phy)
+niv_water_only_fully_filtered_raw <- filter_taxa(niv_water_only_count_filtered_phy, filterfun(kOverA(min_samples_that_need_min_counts_for_taxa, min_counts_for_taxa)), prune = TRUE)
+
+# transform to 10000 counts per sample
+niv_water_only_fully_filtered <- transform_sample_counts(niv_water_only_fully_filtered_raw, function(x) {round(x / sum(x) * 10000)})
+
+o_water_pcoa_bray <- ordinate(niv_water_only_fully_filtered, method="PCoA", distance="bray",k=3)
+p_water_pcoa_bray <- plot_ordination(niv_water_only_fully_filtered, o_water_pcoa_bray, type="samples", color="month", shape="station")
+
+o_water_nmds_bray <- ordinate(niv_water_only_fully_filtered, method="NMDS", distance="bray",k=3)
+p_water_nmds_bray <- plot_ordination(niv_water_only_fully_filtered, o_water_nmds_bray, type="samples", color="month", shape="station")
+p_water_nmds_bray_colors <- plot_ordination(niv_water_only_fully_filtered, o_water_nmds_bray, type="samples", color="station") + ggtitle("NMDS ordination (Bray distance)")
+
+n_shapes <- length(levels(factor(p_water_pcoa_bray$data[, "station"])))
+good_shapes = c(1:18)
+n_reps <- ceiling(n_shapes / length(good_shapes))
+shapes_to_use <- rep(good_shapes, n_reps)
+
+p_water_pcoa_bray <- p_water_pcoa_bray + scale_shape_manual(values = shapes_to_use) + ggtitle("PCoA ordination (Bray distance) of water samples")
+p_water_nmds_bray <- p_water_nmds_bray + scale_shape_manual(values = shapes_to_use) + ggtitle("NMDS ordination (Bray distance) of water samples")
+
+##3D ordination
+niv_water_sample_data<-sample_data(niv_water_only_fully_filtered)
+nmds_coordinates<-data.frame(o_water_nmds_bray$points)
+pcoa_coordinates<-data.frame(o_water_pcoa_bray$points)
+nmds_merged<-merge(nmds_coordinates,niv_water_sample_data,all.x=TRUE,all.y=TRUE,by = 'row.names')
+nmds_3d<-plot_ly(nmds_merged,x=~MDS1,y=~MDS2,z=~MDS3,color=~station,hovertext=paste("Station:",nmds_merged$station,"\nSample:",nmds_merged$Row.names,"\nDate:",nmds_merged$date),hoverinfo="text",type="scatter3d",mode="markers")
+#htmlwidgets::saveWidget(as_widget(nmds_3d),"nmds.html")
+
+
+##static for publication
+
+nmds_2d <- ggplot(nmds_merged,aes(x=MDS1,y=MDS2))+geom_point(aes(color = station))+ggtitle("NMDS Ordination by \n Station and Date")+theme(legend.text= element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 30, face = "bold"), axis.text.x = element_text(angle = 90),legend.position="right",axis.text=element_text(face="bold"),text = element_text(size = 20))
+nmds_2d<-nmds_2d+guides(colour = guide_legend(nrow = 8))
+nmds_2d
+
+nmds_3d
+```
+
+<br/><br/>
+
+Next lets look at the Shannon Alpha diversity at each station as well as perform a rarefication analysis across sample sites using both observed and shannon diversity.
+
+<br/><br/>
+
+```{r alpha, echo=FALSE, fig.width=25, fig.height=30, fig.cap = "<br/>Supplemental Figure 1: Rarefication analysis across sample sites with predicted,observed,and Shannon diversity calculated across sequencing depth. Points are colored by unique sampling date.<br/><br/><br/>"}
+
+calculate_rarefaction_curves <- function(psdata, measures, depths) {
+  # from: https://github.com/joey711/phyloseq/issues/143
+  
+  require('plyr') # ldply
+  require('reshape2') # melt
+  
+  set.seed(42)
+  
+  estimate_rarified_richness <- function(psdata, measures, depth) {
+    if(max(sample_sums(psdata)) < depth) return()
+    psdata <- prune_samples(sample_sums(psdata) >= depth, psdata)
+    
+    rarified_psdata <- rarefy_even_depth(psdata, depth, verbose = FALSE)
+    
+    alpha_diversity <- estimate_richness(rarified_psdata, measures = measures)
+    
+    # as.matrix forces the use of melt.array, which includes the Sample names (rownames)
+    molten_alpha_diversity <- melt(as.matrix(alpha_diversity), varnames = c('Sample', 'Measure'), value.name = 'Alpha_diversity')
+    
+    molten_alpha_diversity
+  }
+  
+  names(depths) <- depths # this enables automatic addition of the Depth to the output by ldply
+  rarefaction_curve_data <- ldply(depths, estimate_rarified_richness, psdata = psdata, measures = measures, .id = 'Depth', .progress = ifelse(interactive(), 'text', 'none'))
+  
+  # convert Depth from factor to numeric
+  rarefaction_curve_data$Depth <- as.numeric(levels(rarefaction_curve_data$Depth))[rarefaction_curve_data$Depth]
+  
+  rarefaction_curve_data
+}
+#'Observed',
+rcd <- calculate_rarefaction_curves(niv_water_only_fully_filtered_raw, c('Observed','Shannon'), rep(c(1, 10, 100, 1000, 1:100 * 10000), each = 10))
+rcd_shannon <- calculate_rarefaction_curves(niv_water_only_fully_filtered_raw,'Shannon', rep(c(1, 10, 100, 1000, 1:100 * 10000), each = 10))
+
+summary(rcd)
+summary(rcd_shannon)
+
+rcds <- ddply(rcd, c('Depth', 'Sample', 'Measure'), summarise, Alpha_diversity_mean = mean(Alpha_diversity), Alpha_diversity_sd = sd(Alpha_diversity))
+rcdsv <- merge(rcds, data.frame(sample_data(niv_water_only_fully_filtered_raw)), by.x = 'Sample', by.y = 'row.names')
+rcdsv$date_fig <-rcdsv$date
+rcdsv$date_fig <- sub("-[^-]+$", "", rcdsv$date_fig)
+
+rcds_shannon <- ddply(rcd_shannon, c('Depth', 'Sample', 'Measure'), summarise, Alpha_diversity_mean = mean(Alpha_diversity), Alpha_diversity_sd = sd(Alpha_diversity))
+rcdsv_shannon <- merge(rcds_shannon, data.frame(sample_data(niv_water_only_fully_filtered_raw)), by.x = 'Sample', by.y = 'row.names')
+rcdsv_shannon$date_fig <-rcdsv_shannon$date
+rcdsv_shannon$date_fig <- sub("-[^-]+$", "", rcdsv_shannon$date_fig)
+rp1 <- ggplot(
+  data = rcdsv,
+  mapping = aes(
+    x = Depth,
+    y = Alpha_diversity_mean,
+    ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+    ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    colour = factor(date),
+    group = station
+  )
+) + #geom_line() +  
+  geom_pointrange() + facet_wrap(facets = station ~ Measure, scales = 'free_y') + theme(legend.position = "none")
+
+rp2 <- ggplot(
+  data = rcdsv_shannon,
+  mapping = aes(
+    x = Depth,
+    y = Alpha_diversity_mean,
+    ymin = Alpha_diversity_mean - Alpha_diversity_sd,
+    ymax = Alpha_diversity_mean + Alpha_diversity_sd,
+    colour = date_fig,
+    group = station
+  )
+) + #geom_line() +  
+  geom_pointrange() + facet_wrap(facets = station ~ Measure, scales = 'free_y') + theme(legend.position = "none") +theme(legend.position = "bottom")
+
+#getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+#levelPalette <- getPalette(400)
+levelPalette <- colorRampPalette(brewer.pal(9, "Set1"))(122)
+rp1 <- rp1 + scale_color_manual(values=levelPalette)
+rp1<-rp1+ scale_color_manual(values=levelPalette)
+rp1<-rp1+ggtitle("Observed and Shannon Diversity by depth of Sequencing and Sample Date")
+rp1 <- rp1+ theme(legend.text= element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 37, face = "bold"), axis.text.x = element_text(angle = 90),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 25))+xlab("Date")
+#ggsave(rp1,file="observed_shannon_diversity.eps",device="eps",height=30,width=25,units="in")
+
+rp1
+
+```
+<b/>
+```{r alpha_2, echo=FALSE, fig.width=10, fig.height=10, fig.cap = "<br/>Supplemental Figure 5: Shannon diversity(calculated using phyloseq’s plot_richness) function across all sample sites."}
+add_lowest_phylogeny <- function(phy, lowest_classification=7) {
+  # looks through the tax_table and adds a column representing the lowest level of phylogeny assigned
+  tax_order <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+  n_tax_order <- length(tax_order)
+  
+  tt <- data.frame(tax_table(phy), stringsAsFactors = F)
+  n_taxa <- nrow(tt)
+  for(i in 1:n_taxa) {
+    ct <- tt[i, 'SVhash']
+    for(j in 1:lowest_classification) {
+      if(is.na(tt[i, tax_order[j]])) {
+        tt[i, 'lowest_tax'] <- ct
+        break
+      } else {
+        ct <- tt[i, tax_order[j]]
+      }
+    }
+    tt[i, 'lowest_tax'] <- ct
+  }
+  
+  ttt <- tax_table(tt)
+  colnames(ttt@.Data) <- colnames(tt)
+  taxa_names(ttt) <- taxa_names(tax_table(phy))
+  tax_table(phy) <- ttt
+  return(phy)
+}
+
+niv_water_only_phy_lowest_tax_added <- add_lowest_phylogeny(niv_water_only_fully_filtered)
+niv_water_only_phy_glommed_lowest_tax <- tax_glom(niv_water_only_phy_lowest_tax_added, taxrank="lowest_tax")
+p_water_only_glommed_lowest_tax <- plot_richness(niv_water_only_phy_glommed_lowest_tax, measures='Observed', x = "station", color=factor(sample_data(niv_water_only_phy_glommed_lowest_tax)$date))
+p_water_only_glommed_lowest_tax_shannon <- plot_richness(niv_water_only_phy_glommed_lowest_tax, measures='Shannon', x = "station", color="date")
+
+p_water_only_glommed_lowest_tax <- p_water_only_glommed_lowest_tax + ggtitle("Observed Diversity at each station over time")+ theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 25, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold"),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 20),legend.box="vertical", legend.margin=margin())+theme(legend.key.width= unit(0.7, 'in'))
+p_water_only_glommed_lowest_tax_shannon<- p_water_only_glommed_lowest_tax_shannon  + ggtitle("Shannon Diversity at each station over time")+ theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 25, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold"),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 20),legend.box="vertical", legend.margin=margin())+theme(legend.key.width= unit(0.7, 'in'))
+
+p_water_only_glommed_lowest_tax_shannon
+#ggsave(p_water_only_glommed_lowest_tax,file="Alpha_oBSERVED.eps",device="eps",height=10,width=10,units="in",dpi=1000)
+#ggsave(p_water_only_glommed_lowest_tax_shannon,file="Alpha_shannon.eps",device="eps",height=10,width=10,units="in",dpi=1000)
+
+```
+
+<br/><br/>
+
+Now we will look at phylum and kingdom level bar charts over time for each sample location. The two IVF locations from Alamo River and Managed Marsh have been combined for visualization. 
+
+<br/><br/>
+```{r community_bar, echo=FALSE, fig.width=15, fig.height=15, fig.cap = c("Figure 3A: Bar 264plot of ASVs over time at each station agglomerated to the Phylum level. Vertical lines mark where specific sampling 265locations for the Alamo River and Managed Marsh changed due to previous locations becoming inaccessible.<br/><br/><br/><br/>","<br/>Supplemental Figure 3Bar plot of ASVs over time at each station agglomerated to the Kingdom leve" )}
+create_custom_phylogeny_bar_chart <- function(phy_obj, phy_level) {
+  phy_obj_melted <- psmelt(phy_obj)
+  
+  # order this melted data frame by date and then station
+  phy_obj_melted_ordered <- phy_obj_melted[with(phy_obj_melted, order(date, station)), ]
+  
+  # add a column with the desired order of samples to appear in plots
+  phy_obj_melted_ordered$order <- c(1:nrow(phy_obj_melted_ordered))
+  
+  # reorder the levels of the x variable to match the desired order
+  phy_obj_melted_ordered$Sample <- factor(phy_obj_melted_ordered$Sample, levels = unique(phy_obj_melted_ordered$Sample[order(phy_obj_melted_ordered$order)]))
+  
+  cp1 <- ggplot(phy_obj_melted_ordered, aes_string(x="Sample", y="Abundance", fill=phy_level))
+  cp1 <- cp1 + geom_bar(stat="identity", position="stack")
+  
+  # get the unique attributes from the ordered data frame to use as labels
+  # important to ensure that the ordering is the same
+  udf_att <- phy_obj_melted_ordered[!duplicated(phy_obj_melted_ordered$Sample), ]
+  
+  cp1 <- cp1 + scale_x_discrete(labels=udf_att$date)
+  cp1 <- cp1 + theme(axis.text.x=element_text(angle=-90, hjust=0, size=5))
+  cp1 <- cp1 + theme(legend.position = "bottom")
+  
+  getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+  levelPalette <- getPalette(length(get_taxa_unique(phy_obj, taxonomic.rank = phy_level)))
+  cp1 <- cp1 + scale_fill_manual(values=levelPalette)
+  cp1 <- cp1 + facet_grid('station ~ .')
+  cp1 <- cp1 + theme(strip.text.y = element_text(angle=0))
+  cp1 <- cp1 + xlab('Date')
+  
+  return(cp1)
+}
+
+###produce external datasets for bar chart
+niv_water_only_kingdom_glom <- tax_glom(niv_water_only_fully_filtered, 'Kingdom')
+niv_water_only_kingdom_glom_psmelt<-psmelt(niv_water_only_kingdom_glom)
+niv_water_only_kingdom_glom_psmelt$station_fig <-niv_water_only_kingdom_glom_psmelt$station
+niv_water_only_kingdom_glom_psmelt$station_fig <-  sub("_[^_]+$", "",niv_water_only_kingdom_glom_psmelt$station_fig)
+niv_water_only_kingdom_glom_psmelt$station_fig <-  sub("S_Managed", "Managed",niv_water_only_kingdom_glom_psmelt$station_fig)
+
+nivWater_bar_kingdom<-ggplot(niv_water_only_kingdom_glom_psmelt,aes(fill=Kingdom,y=Abundance,x=factor(date)))+geom_bar(position="stack", stat="identity")+facet_wrap(~station_fig,ncol=1)
+nivWater_bar_kingdom<- nivWater_bar_kingdom+ ggtitle("Kingdom Level Abundance over Time") + theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 25, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold"),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 20),legend.box="vertical", legend.margin=margin())+ guides(fill=guide_legend(ncol=2))
+nivWater_bar_kingdom<- nivWater_bar_kingdom+ theme(plot.background = element_rect(color = 1,
+                                       size = 1),
+        plot.margin = margin(t = 1,  # Top margin
+                             r = 1,  # Right margin
+                             b = 1,  # Bottom margin
+                             l = 1,  # Left margin
+                             unit = "cm"))
+
+nivWater_bar_kingdom_labels<-data.frame(station_fig=factor("Alamo_River","Alamo_River","Managed_Marsh","Managed_Marsh"),label=c("IVF007","IVF017","IVF016","IVF022"),ID=c("2018-02-23","2019-02-06","2018-10-02","2019-08-07"),y=c(0.000028, 0.000028, 0.000028,0.000028))
+#ggsave(nivWater_bar_kingdom,file="nivWater_bar_kingdom.eps",device="eps",height=13,width=9,units="in",dpi=1000)
+
+
+niv_water_only_phylum_glom <- tax_glom(niv_water_only_fully_filtered, 'Phylum')
+niv_water_only_phylum_glom_psmelt<-psmelt(niv_water_only_phylum_glom)
+niv_water_only_phylum_glom_psmelt$station_fig <-niv_water_only_phylum_glom_psmelt$station
+niv_water_only_phylum_glom_psmelt$station_fig <-  sub("_[^_]+$", "",niv_water_only_phylum_glom_psmelt$station_fig)
+niv_water_only_phylum_glom_psmelt$station_fig <-  sub("S_Managed", "Managed",niv_water_only_phylum_glom_psmelt$station_fig)
+
+nivWater_bar_phylum<-ggplot(niv_water_only_phylum_glom_psmelt,aes(fill=Phylum,y=Abundance,x=factor(date)))+geom_bar(position="stack", stat="identity")+facet_wrap(~station_fig,ncol=1)
+nivWater_bar_phylum<- nivWater_bar_phylum+ ggtitle("(A)   Phylum Level Abundance over Time") + theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 25, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold"),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 20),legend.box="vertical", legend.margin=margin())+ guides(fill=guide_legend(ncol=2))
+nivWater_bar_phylum<- nivWater_bar_phylum+ theme(plot.background = element_rect(color = 1,
+                                       size = 1),
+        plot.margin = margin(t = 1,  # Top margin
+                             r = 1,  # Right margin
+                             b = 1,  # Bottom margin
+                             l = 1,  # Left margin
+                             unit = "cm"))
+#ggsave(nivWater_bar_phylum,file="nivWater_bar_phylum.eps",device="eps",height=15,width=15,units="in",dpi=1000)
+nivWater_bar_phylum
+
+nivWater_bar_kingdom
+
+```
+<br/><br/>
+
+We can also produce a heatmap using the 75 most abundance Amplicon Sequence Variants (ASVs) agglomerated to the class levels and sorted by sample name showing clear differentiation between sites.
+
+<br/><br/>
+```{r community_heatmap, echo=FALSE, fig.width=15, fig.height=15, fig.cap = "Supplemental Figure 2: Heatmap of the top 75 ASVs agglomerated to theclass levelcolumns sorted by sample name."}
+
+niv_water_only_tax_df <- data.frame(tax_table(niv_water_only_fully_filtered), stringsAsFactors = FALSE)
+niv_water_only_tax_df[, 'sequence'] <- row.names(niv_water_only_tax_df)
+niv_water_only_tax_df_seq_row_names <- niv_water_only_tax_df
+row.names(niv_water_only_tax_df) <- niv_water_only_tax_df[, 'SVhash']
+
+niv_water_otu_df <- data.frame(otu_table(niv_water_only_fully_filtered))
+
+# ensure that otu_table and tax_table come back in the same order
+row_name_check <- row.names(niv_water_only_tax_df_seq_row_names) == row.names(niv_water_otu_df)
+if (length(row_name_check) == sum(row_name_check)) {
+  # row names match
+} else {
+  cat("ERROR: ROW NAMES DO NOT MATCH: STOP AND FIX")
+}
+
+# for exploratory purposes, we first looked at the top 10% of ASVs, but quickly discovered that there were far too many to discern visually
+row.names(niv_water_otu_df) <- row.names(niv_water_only_tax_df)
+niv_water_otu_df[, "sum"] <- rowSums(niv_water_otu_df)
+otu_sums <- niv_water_otu_df[, "sum"]
+names(otu_sums) <- row.names(niv_water_otu_df)
+otu_sums <- sort(otu_sums, decreasing=T)
+top_10_percent_otus <- otu_sums[1:ceiling(length(otu_sums) * 0.1)]
+smallest_otu_count_in_top_10_percent <- as.integer(top_10_percent_otus[length(top_10_percent_otus)])
+
+niv_water_only_top10percent <- filter_taxa(niv_water_only_fully_filtered, function(x) sum(x) > smallest_otu_count_in_top_10_percent, TRUE)
+
+smallest_otu_count_in_top_75 <- as.integer(top_10_percent_otus[75])
+niv_water_only_top75_OTUs <- filter_taxa(niv_water_only_fully_filtered, function(x) sum(x) >= smallest_otu_count_in_top_75, TRUE)
+
+top75_heatmap1_order <- plot_heatmap(niv_water_only_top75_OTUs, sample.label="station", taxa.label="Class",low="#66CCFF", high="#000033",na.value="white") + ggtitle("Prevalence of top 75 water ASVs")+theme(legend.text= element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 25, face = "bold"), axis.text.x = element_text(angle = 90),axis.text.y = element_text(face = "bold"),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 20))
+top75_heatmap1_hash <- plot_heatmap(niv_water_only_top75_OTUs, sample.label="station", taxa.label="SVhash", low="#66CCFF", high="#000033",na.value="white" ) + ggtitle("Prevalence of top 75 water ASVs") + theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 25, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold"),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 20))
+
+# after inspecting the heatmaps, we manually reorder the rows and columns
+top75_heatmap1_order_shuffled <- top75_heatmap1_order
+col_levels <- levels(top75_heatmap1_order$data$Sample)
+shuffled_col_levels <- col_levels[c(93:132, 1:36, 37:92)]
+top75_heatmap1_order_shuffled$data$Sample <- factor(top75_heatmap1_order_shuffled$data$Sample, shuffled_col_levels)
+
+row_levels <- levels(top75_heatmap1_order$data$OTU)
+shuffled_row_levels <- row_levels[c(18:40,41:75,1:17)]
+top75_heatmap1_order_shuffled$data$OTU <- factor(top75_heatmap1_order_shuffled$data$OTU, shuffled_row_levels)
+top75_heatmap1_order_shuffled<-top75_heatmap1_order_shuffled+theme(legend.key.width= unit(0.5, 'in'))
+#ggsave(top75_heatmap1_order_shuffled,file="top75_heatmap1_order_shuffled.tiff",device="tiff",height=12,width=15,units="in",dpi=1500)
+
+top75_heatmap1_order_shuffled
+```
+
+<br/><br/>
+
+## Obsidian Butte Mar-June 2018
+
+Zooming in on a select group of samples from March through June 2018 at Obsidian Butte shows some temporal differentiation.
+
+Alpha diversity spikes in the May 15th samples.
+
+<br/><br/>
+
+```{r obsidian_butte_alpha, echo=FALSE, fig.width=20, fig.height=10, fig.cap = "Figure 4A: Seven Alpha diversity indexes shown side by side to assess evenness and richness of the community. X axis reflects 298dates of interest and y axis the calculated alpha diversity. The higher the value of y the more diverse the community is. The 299measures used include Observed diversity index, Chao1 diversity index, ACE diversity index, Shannon diversity index, Simpson 300diversity index, Inverse Simpson diversity index and Fisher diversity index."}
+
+ivf008_regex <- "IVF008"
+
+s_df_niv_water_only_filtered <- data.frame(sample_data(niv_water_only_fully_filtered))
+ivf008_s_df <- data.frame(subset(s_df_niv_water_only_filtered, grepl(ivf008_regex, s_df_niv_water_only_filtered$station)))
+ivf008_sample_names <- row.names(ivf008_s_df)
+ivf008_data_phy <- prune_samples(ivf008_sample_names, niv_water_only_fully_filtered)
+ivf008_data_phy <- prune_taxa(taxa_sums(ivf008_data_phy) > 0, ivf008_data_phy)
+
+# merge on date and retransform because merge currently sums up ASVs
+ivf008_merged <- merge_samples(ivf008_data_phy, 'date')
+
+# need to repair non-numeric columns, just the date for now
+sample_data(ivf008_merged)$date <- row.names(sample_data(ivf008_merged))
+
+ivf008_merged <- transform_sample_counts(ivf008_merged, function(x) {round(x / sum(x) * 10000)})
+
+ivf008_tax <- data.frame(tax_table(ivf008_merged))
+ivf008_asv <- t(data.frame(otu_table(ivf008_merged)))
+ivf008_asv_full_amplicon_seqs <- ivf008_asv
+rownames(ivf008_asv) <- ivf008_tax$SVhash
+
+ivf008_march_counts <- ivf008_asv_full_amplicon_seqs[, "2018-03-22"]
+ivf008_april_counts <- ivf008_asv_full_amplicon_seqs[, "2018-04-30"]
+ivf008_may_counts <- ivf008_asv_full_amplicon_seqs[, "2018-05-30"]
+ivf008_june_counts <- ivf008_asv_full_amplicon_seqs[, "2018-06-26"]
+
+# visualize the 5 dates in Spring 2018 with all taxa over 100 normalized counts (1%)
+spring_2018_sample_names <- c("2018-03-22", "2018-04-30", "2018-05-15", "2018-05-30", "2018-06-26")
+over_100_spring <- list()
+spring_combined_over_100 <- vector()
+for(i in spring_2018_sample_names) {
+  current_sample_counts <- ivf008_asv_full_amplicon_seqs[, i]
+  over_100_spring <- names(current_sample_counts[current_sample_counts > 10])
+  spring_combined_over_100 <- c(spring_combined_over_100, over_100_spring)
+}
+spring_combined_over_100 <- unique(spring_combined_over_100)
+
+spring_combined_over_100_phy <- prune_taxa(spring_combined_over_100, ivf008_merged)
+spring_combined_over_100_phy <- prune_samples(spring_2018_sample_names, spring_combined_over_100_phy)
+spring_combined_over_100_phy <- add_lowest_phylogeny(spring_combined_over_100_phy)
+# look at alpha diversity in May
+spring_combined_over_100_diversity_plot <- plot_richness(spring_combined_over_100_phy)
+spring_combined_over_100_diversity_plot <-spring_combined_over_100_diversity_plot+ ggtitle("Seven Alpha Diversity Measures calcualte\n at Obsidian Butte from March to June") + theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 30, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold"),legend.position="right",axis.text=element_text(face="bold"),text = element_text(size = 25),legend.box="vertical", legend.margin=margin())
+spring_combined_over_100_diversity_plot<-spring_combined_over_100_diversity_plot+ theme(plot.background = element_rect(color = 1,
+                                       size = 1),
+        plot.margin = margin(t = 1,  # Top margin
+                             r = 1,  # Right margin
+                             b = 1,  # Bottom margin
+                             l = 1,  # Left margin
+                             unit = "cm"))
+#ggsave(spring_combined_over_100_diversity_plot ,file="spring_combined_over_100_diversity_plot.eps",device="eps",height=10,width=20,units="in",dpi=1000)
+spring_combined_over_100_diversity_plot
+```
+
+<br/><br/>
+
+Next we have bar charts at Obsidian Butte from March to June at the phylum level and lowest assigned.
+
+<br/><br/>
+
+```{r obsidian_butte_bar, echo=FALSE, fig.width=20, fig.height=25, fig.cap = c("Figure 4B: ASV abundance at Obsidian Butte from March through Juneof 2018. ASV abundances were agglomeratedto the phylum level.<br/><br/><br/>","<br/>Supplemental Figure 4: A bar chart showing ASV abundance at Obsidian Butte from March through June. ASV abundances were agglomorated to thelowest level at which a unique classification was possible.") }
+
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+levelPalette <- getPalette(length(get_taxa_unique(spring_combined_over_100_phy, taxonomic.rank = "Phylum")))
+spring_combined_over_100_bar_phylum <- plot_bar(spring_combined_over_100_phy, fill="Phylum") + scale_fill_manual(values=levelPalette)
+spring_combined_over_100_bar_phylum<-spring_combined_over_100_bar_phylum+ ggtitle("(B)    Bar Chart indicating phylum level ASV Abundance at Obsidian Butte") + theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 30, face = "bold",hjust=0.5), axis.text.x = element_text(size=25,face = "bold",angle=0,hjust=0.5,vjust=0.2),legend.position="right",axis.text=element_text(face="bold"),text = element_text(size = 25),legend.box="vertical", legend.margin=margin())
+spring_combined_over_100_bar_phylum<-spring_combined_over_100_bar_phylum +theme(plot.background = element_rect(color = 1,
+                                       size = 1),
+        plot.margin = margin(t = 1,  # Top margin
+                             r = 1,  # Right margin
+                             b = 1,  # Bottom margin
+                             l = 1,  # Left margin
+                             unit = "cm"))
+#ggsave(spring_combined_over_100_bar_phylum ,file="spring_combined_over_100_bar_phylum.eps",device="eps",height=20,width=25,units="in",dpi=1000)
+
+fig4<- spring_combined_over_100_diversity_plot + spring_combined_over_100_bar_phylum + plot_layout(ncol=1,heights=c(1,2))
+#ggsave(fig4 ,file="Figure4.eps",device="eps",height=20,width=25,units="in",dpi=1000)
+
+spring_combined_over_100_bar_phylum
+
+```
+<br/><br/>
+
+```{r obsidian_butte_bar_lowest, echo=FALSE, fig.width=20, fig.height=25, fig.cap = c("Figure 4B: ASV abundance at Obsidian Butte from March through Juneof 2018. ASV abundances were agglomeratedto the phylum level.<br/><br/><br/>","<br/>Supplemental Figure 4: A bar chart showing ASV abundance at Obsidian Butte from March through June. ASV abundances were agglomorated to thelowest level at which a unique classification was possible.") }
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+levelPalette <- getPalette(length(get_taxa_unique(spring_combined_over_100_phy, taxonomic.rank = "lowest_tax")))
+spring_combined_over_100_bar_lowest <- plot_bar(spring_combined_over_100_phy, fill="lowest_tax") + scale_fill_manual(values=levelPalette)
+spring_combined_over_100_bar_lowest<- spring_combined_over_100_bar_lowest+ ggtitle("Bar Chart indicating ASV Abundance at Obsidian Butte") + theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 25, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold"),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 25),legend.box="vertical", legend.margin=margin())
+#ggsave(spring_combined_over_100_bar_lowest ,file="spring_combined_over_100_bar_lowest.eps",device="eps",height=25,width=20,units="in",dpi=1000)
+
+spring_combined_over_100_bar_lowest
+```
+
+
+<br/><br/>
+
+Finally we zoom in on some manually curated unique facet groups to look at change over time at Obsidian Butte. These plots show Obsidian Butte Phylum level abundances from March through Juneof 2018 separated into unique groups.Groups were chosen based on known correlations between certain species in the literature and overlapping trends in abundances.
+
+<br/><br/>
+
+```{r obsidian_butte_line, echo=FALSE, fig.width=20, fig.height=10, fig.cap = c("<br/>Supplemental Figure 6A: Phylum level Group 1 abundance from March to June 2018<br/><br/>","<br/>Supplemental Figure 6B: Phylum level Group 2 abundance from March to June 2018","<br/>Supplemental Figure 6C: Phylum level Group 3 abundance from March to June 2018") }
+
+spring_combined_over_100_phy_melted <- psmelt(spring_combined_over_100_phy)
+
+spring_combined_over_100_phy_melted$Kingdom <- as.character(spring_combined_over_100_phy_melted$Kingdom)
+spring_combined_over_100_phy_melted$Phylum <- as.character(spring_combined_over_100_phy_melted$Phylum)
+
+# fix the identical phyla that occur when the kingdom is chloroplast
+n_rows <- nrow(spring_combined_over_100_phy_melted)
+for(i in 1:n_rows) {
+  if(spring_combined_over_100_phy_melted[i, "Kingdom"] == "Chloroplast") {
+    spring_combined_over_100_phy_melted[i, "Phylum"] <- paste0(as.character(spring_combined_over_100_phy_melted[i, "Phylum"]), "_Chloroplast")
+  }
+}
+spring_combined_over_100_phy_melted$Kingdom <- as.factor(spring_combined_over_100_phy_melted$Kingdom)
+spring_combined_over_100_phy_melted$Phylum <- as.factor(spring_combined_over_100_phy_melted$Phylum)
+
+
+spring_combined_over_100_phy_melted_may15 <- spring_combined_over_100_phy_melted[spring_combined_over_100_phy_melted$date=="2018-05-15", ]
+
+spring_combined_over_100_phy_melted_may15_chlorophyta <- spring_combined_over_100_phy_melted_may15[spring_combined_over_100_phy_melted_may15$Phylum %in% c("Chlorophyta", "Chlorophyta_Chloroplast") , ]
+chloro_may15_bar <- ggplot(spring_combined_over_100_phy_melted_may15_chlorophyta, aes(x=date, y=Abundance, fill=lowest_tax)) + geom_col(position="stack")
+
+spring_combined_over_100_phy_melted_may15_ochrophyta <- spring_combined_over_100_phy_melted_may15[spring_combined_over_100_phy_melted_may15$Phylum %in% c("Ochrophyta", "Ochrophyta_Chloroplast") , ]
+ochro_may15_bar <- ggplot(spring_combined_over_100_phy_melted_may15_ochrophyta, aes(x=date, y=Abundance, fill=lowest_tax)) + geom_col(position="stack")
+
+# april30 metazoa
+spring_combined_over_100_phy_melted_april30 <- spring_combined_over_100_phy_melted[spring_combined_over_100_phy_melted$date=="2018-04-30", ]
+spring_combined_over_100_phy_melted_april30_metazoa <- spring_combined_over_100_phy_melted_april30[spring_combined_over_100_phy_melted_april30$Phylum %in% c("Metazoa") , ]
+metazoa_april30_bar <- ggplot(spring_combined_over_100_phy_melted_april30_metazoa, aes(x=date, y=Abundance, fill=lowest_tax)) + geom_col(position="stack")
+
+spring_combined_over_100_phy_melted_april30 <- spring_combined_over_100_phy_melted[spring_combined_over_100_phy_melted$date=="2018-04-30", ]
+
+# may30 metazoa
+spring_combined_over_100_phy_melted_may30 <- spring_combined_over_100_phy_melted[spring_combined_over_100_phy_melted$date=="2018-05-30", ]
+spring_combined_over_100_phy_melted_may30_metazoa <- spring_combined_over_100_phy_melted_may30[spring_combined_over_100_phy_melted_may30$Phylum %in% c("Metazoa") , ]
+metazoa_may30_bar <- ggplot(spring_combined_over_100_phy_melted_may30_metazoa, aes(x=date, y=Abundance, fill=lowest_tax)) + geom_col(position="stack")
+
+
+# glom to phylum to have more options for plotting
+spring_combined_over_100_phylum_glom <- tax_glom(spring_combined_over_100_phy, taxrank = "Phylum")
+
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+levelPalette <- getPalette(length(get_taxa_unique(spring_combined_over_100_phylum_glom, taxonomic.rank = "Phylum")))
+spring_combined_over_100_phylum_glom_bar <- plot_bar(spring_combined_over_100_phylum_glom, fill="Phylum") + scale_fill_manual(values=levelPalette)
+
+spring_combined_over_100_phylum_glom_melted <- psmelt(spring_combined_over_100_phylum_glom)
+spring_combined_over_100_phylum_glom_melted$Kingdom <- as.character(spring_combined_over_100_phylum_glom_melted$Kingdom)
+spring_combined_over_100_phylum_glom_melted$Phylum <- as.character(spring_combined_over_100_phylum_glom_melted$Phylum)
+
+# fix the identical phyla that occur when the kingdom is chloroplast
+n_rows <- nrow(spring_combined_over_100_phylum_glom_melted)
+for(i in 1:n_rows) {
+  if(spring_combined_over_100_phylum_glom_melted[i, "Kingdom"] == "Chloroplast") {
+    spring_combined_over_100_phylum_glom_melted[i, "Phylum"] <- paste0(as.character(spring_combined_over_100_phylum_glom_melted[i, "Phylum"]), "_Chloroplast")
+  }
+}
+spring_combined_over_100_phylum_glom_melted$Phylum <- as.factor(spring_combined_over_100_phylum_glom_melted$Phylum)
+
+# add a facet group to separate the Phyla into interesting groups
+facet_group_1 <- c("Actinobacteria", "Bacteroidetes", "Metazoa", "Proteobacteria")
+facet_group_2 <- c("Chlorophyta", "Chlorophyta_Chloroplast", "Dinoflagellata", "Ochrophyta", "Ochrophyta_Chloroplast", "Verrucomicrobia", "Planctomycetes")
+
+spring_combined_over_100_phylum_glom_melted$facet_group = 3
+for(i in 1:n_rows) {
+  if (spring_combined_over_100_phylum_glom_melted[i, "Phylum"] %in% facet_group_1) {
+    spring_combined_over_100_phylum_glom_melted[i, "facet_group"] <- 1
+  } else if (spring_combined_over_100_phylum_glom_melted[i, "Phylum"] %in% facet_group_2) {
+    spring_combined_over_100_phylum_glom_melted[i, "facet_group"] <- 2
+  }
+}
+
+spring_combined_over_100_phylum_glom_melted_fg1 <- spring_combined_over_100_phylum_glom_melted[spring_combined_over_100_phylum_glom_melted$facet_group == 1, ] 
+
+spring_combined_over_100_phylum_glom_melted_fg2 <- spring_combined_over_100_phylum_glom_melted[spring_combined_over_100_phylum_glom_melted$facet_group == 2, ] 
+
+spring_combined_over_100_phylum_glom_melted_fg3 <- spring_combined_over_100_phylum_glom_melted[spring_combined_over_100_phylum_glom_melted$facet_group == 3, ] 
+
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+levelPalette <- getPalette(length(unique(spring_combined_over_100_phylum_glom_melted_fg1$Phylum)))
+spring_combined_over_100_phylum_glom_melted_fg1_line <- ggplot(spring_combined_over_100_phylum_glom_melted_fg1, aes(x=date, y=Abundance, color=Phylum,size=3)) + geom_point() + geom_line(aes(group=Phylum)) + scale_fill_manual(values=levelPalette) + scale_color_manual(values=levelPalette)
+
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+levelPalette <- getPalette(length(unique(spring_combined_over_100_phylum_glom_melted_fg2$Phylum)))
+spring_combined_over_100_phylum_glom_melted_fg2_line <- ggplot(spring_combined_over_100_phylum_glom_melted_fg2, aes(x=date, y=Abundance, color=Phylum,size=3)) + geom_point() + geom_line(aes(group=Phylum)) + scale_fill_manual(values=levelPalette) + scale_color_manual(values=levelPalette)
+
+getPalette <- colorRampPalette(brewer.pal(9, "Set1"))
+levelPalette <- getPalette(length(unique(spring_combined_over_100_phylum_glom_melted_fg3$Phylum)))
+spring_combined_over_100_phylum_glom_melted_fg3_line <- ggplot(spring_combined_over_100_phylum_glom_melted_fg3, aes(x=date, y=Abundance, color=Phylum,size=3)) + geom_point() + geom_line(aes(group=Phylum)) + scale_fill_manual(values=levelPalette) + scale_color_manual(values=levelPalette) + ylim(c(0,200))
+
+spring_combined_over_100_phylum_glom_melted_fg1_line<-spring_combined_over_100_phylum_glom_melted_fg1_line+ggtitle("Obsidian Butte Abundances from March to June Group 1")+ theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 40, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold",hjust=0.98,vjust=0.2),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 35),legend.box="vertical", legend.margin=margin())+ guides(fill=guide_legend(ncol=2))+theme(plot.background = element_rect(color = 1,
+                                       size = 1),
+        plot.margin = margin(t = 1,  # Top margin
+                             r = 1,  # Right margin
+                             b = 1,  # Bottom margin
+                             l = 1,  # Left margin
+                             unit = "cm"))
+ 
+spring_combined_over_100_phylum_glom_melted_fg2_line<-spring_combined_over_100_phylum_glom_melted_fg2_line+ggtitle("Obsidian Butte Abundances from March to June Group 2")+ theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 40, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold",hjust=0.98,vjust=0.2),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 35),legend.box="vertical", legend.margin=margin())+guides(fill=guide_legend(ncol=3))+theme(plot.background = element_rect(color = 1,
+                                       size = 1),
+        plot.margin = margin(t = 1,  # Top margin
+                             r = 1,  # Right margin
+                             b = 1,  # Bottom margin
+                             l = 1,  # Left margin
+                             unit = "cm"))
+
+spring_combined_over_100_phylum_glom_melted_fg3_line<-spring_combined_over_100_phylum_glom_melted_fg3_line+ggtitle("Obsidian Butte Abundances from March to June Group 3")+ theme(legend.text= element_text(face = "bold"),axis.text.y = element_text(face = "bold"),legend.title = element_text(face = "bold"),axis.title = element_text(face="bold"), plot.title = element_text(size = 40, face = "bold",hjust=0.5), axis.text.x = element_text(angle = 90,face = "bold",hjust=0.98,vjust=0.2),legend.position="bottom",axis.text=element_text(face="bold"),text = element_text(size = 35),legend.box="vertical", legend.margin=margin())+ guides(fill=guide_legend(ncol=3))+theme(plot.background = element_rect(color = 1,
+                                       size = 1),
+        plot.margin = margin(t = 1,  # Top margin
+                             r = 1,  # Right margin
+                             b = 1,  # Bottom margin
+                             l = 1,  # Left margin
+                             unit = "cm"))
+
+
+sup1<-spring_combined_over_100_phylum_glom_melted_fg1_line+spring_combined_over_100_phylum_glom_melted_fg2_line+spring_combined_over_100_phylum_glom_melted_fg3_line+plot_layout(ncol=1)
+#ggsave(sup1,file="Sup1.eps",device="eps",height=40,width=26,units="in",dpi=1000)
+spring_combined_over_100_phylum_glom_melted_fg1_line
+
+spring_combined_over_100_phylum_glom_melted_fg2_line
+
+spring_combined_over_100_phylum_glom_melted_fg3_line
+```
+
