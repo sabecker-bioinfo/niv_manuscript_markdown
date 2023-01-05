@@ -2,13 +2,15 @@
 title: "North Imperial Valley UA Study"
 author: "Elaina Graham"
 date: "2022-09-15"
-output: 
+output:
   html_document:
-    toc: true
+    toc: yes
     toc_depth: 2
-    toc_float: true
+    toc_float: yes
     fig_caption: yes
-
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
 ---
 
 ```{r setup, include=FALSE}
